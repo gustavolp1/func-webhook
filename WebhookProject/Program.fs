@@ -21,4 +21,5 @@ let app = builder.Build()
 // Use the Giraffe web application handler.
 app.UseGiraffe webApp
 // Run the application.
+app.Urls.Add("http://localhost:5000")
 app.Run()
