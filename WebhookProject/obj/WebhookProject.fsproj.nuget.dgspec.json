@@ -50,6 +50,11 @@
               "target": "Package",
               "version": "[7.0.2, )",
               "generatePathProperty": true
+            },
+            "LiteDB": {
+              "target": "Package",
+              "version": "[5.0.21, )",
+              "generatePathProperty": true
             }
           },
           "imports": [

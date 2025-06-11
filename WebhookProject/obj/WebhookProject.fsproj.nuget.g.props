@@ -13,6 +13,7 @@
     <SourceRoot Include="C:\Users\Gustavo Lindenberg\.nuget\packages\" />
   </ItemGroup>
   <PropertyGroup Condition=" '$(ExcludeRestorePackageImports)' != 'true' ">
+    <PkgLiteDB Condition=" '$(PkgLiteDB)' == '' ">C:\Users\Gustavo Lindenberg\.nuget\packages\litedb\5.0.21</PkgLiteDB>
     <PkgFSharp_Core Condition=" '$(PkgFSharp_Core)' == '' ">C:\Users\Gustavo Lindenberg\.nuget\packages\fsharp.core\9.0.202</PkgFSharp_Core>
     <PkgGiraffe Condition=" '$(PkgGiraffe)' == '' ">C:\Users\Gustavo Lindenberg\.nuget\packages\giraffe\7.0.2</PkgGiraffe>
   </PropertyGroup>

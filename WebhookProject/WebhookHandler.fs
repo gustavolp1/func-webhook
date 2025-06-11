@@ -1,6 +1,7 @@
 module WebhookHandler
 
 open Microsoft.AspNetCore.Http
+open LiteDB
 open Giraffe
 open System.Text.Json
 open System.Net.Http
@@ -15,6 +16,20 @@ type PaymentPayload = {
     currency: string
     timestamp: string
 }
+
+type PaymentRecord = {
+    Id: string
+    Amount: float
+    Currency: string
+    Timestamp: string
+    Event: string
+    ReceivedAt: DateTime
+}
+
+let persistPayment (record: PaymentRecord) =
+    use db = new LiteDatabase("Filename=payments.db;Connection=shared")
+    let col = db.GetCollection<PaymentRecord>("payments")
+    col.Upsert(record) |> ignore
 
 let tokenEsperado = "meu-token-secreto"
 let transacoesRecebidas = ConcurrentDictionary<string, bool>()
@@ -72,6 +87,17 @@ let webhookHandler: HttpHandler =
                 else
                     transacoesRecebidas.TryAdd(payload.transaction_id, true) |> ignore
                     let! success = confirmarTransacao payload
+                    if success then
+                        persistPayment {
+                            Id = payload.transaction_id
+                            Amount = amountValue
+                            Currency = payload.currency
+                            Timestamp = payload.timestamp
+                            Event = payload.event
+                            ReceivedAt = DateTime.UtcNow
+                        }
+                    else
+                        eprintfn "Failed to confirm transaction"
                     if not success then eprintfn "Failed to confirm transaction"
                     return! Successful.OK (text "Transação confirmada") next ctx
             with ex ->
