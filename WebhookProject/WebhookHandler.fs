@@ -11,7 +11,7 @@ open System
 type PaymentPayload = {
     event: string
     transaction_id: string
-    amount: float
+    amount: string
     currency: string
     timestamp: string
 }
@@ -19,65 +19,62 @@ type PaymentPayload = {
 let tokenEsperado = "meu-token-secreto"
 let transacoesRecebidas = ConcurrentDictionary<string, bool>()
 
-let confirmarTransacao (payload: PaymentPayload) =
+let postToEndpoint endpoint payload =
     task {
-        use client = new HttpClient()
-        let json = JsonSerializer.Serialize(payload)
-        use content = new StringContent(json, System.Text.Encoding.UTF8, "application/json")
-        let! _ = client.PostAsync("http://localhost:5000/confirmar", content)
-        return ()
+        try
+            use client = new HttpClient()
+            client.Timeout <- TimeSpan.FromSeconds(10.0)
+            let json = JsonSerializer.Serialize(payload)
+            use content = new StringContent(json, System.Text.Encoding.UTF8, "application/json")
+            let! response = client.PostAsync($"http://localhost:5001/{endpoint}", content)
+            return response.IsSuccessStatusCode
+        with ex ->
+            eprintfn $"Error calling {endpoint}: {ex.Message}"
+            return false
     }
 
-let cancelarTransacao (payload: PaymentPayload) =
-    task {
-        use client = new HttpClient()
-        let json = JsonSerializer.Serialize(payload)
-        use content = new StringContent(json, System.Text.Encoding.UTF8, "application/json")
-        let! _ = client.PostAsync("http://localhost:5000/cancelar", content)
-        return ()
-    }
+let confirmarTransacao = postToEndpoint "confirmar"
+let cancelarTransacao = postToEndpoint "cancelar"
 
 let webhookHandler: HttpHandler =
     fun next ctx -> task {
         let token = ctx.Request.Headers.["X-Webhook-Token"].ToString()
 
         if token <> tokenEsperado then
-            let unauthorizedHandler = RequestErrors.UNAUTHORIZED "Bearer" "Webhook" "Token inválido"
-            return! unauthorizedHandler next ctx
+            return! RequestErrors.UNAUTHORIZED "Bearer" "Webhook" "Token inválido" next ctx
         else
-            let! payloadResult =
-                task {
-                    try
-                        let! p = ctx.BindJsonAsync<PaymentPayload>()
-                        return Ok p
-                    with ex ->
-                        return Error $"Erro ao desserializar payload: {ex.Message}"
-                }
+            try
+                let! payload = ctx.BindJsonAsync<PaymentPayload>()
 
-            match payloadResult with
-            | Ok payload ->
-                if System.String.IsNullOrWhiteSpace(payload.transaction_id) then
-                    let! result = RequestErrors.badRequest (text "transaction_id obrigatório") next ctx
-                    return result
-                else if transacoesRecebidas.ContainsKey(payload.transaction_id) then
-                    let! result = RequestErrors.badRequest (text "Transação duplicada") next ctx
-                    return result
-                else if payload.amount <= 0.0 || payload.currency <> "BRL" then
-                    do! cancelarTransacao payload // Side effect: await cancellation
-                    let! result = RequestErrors.badRequest (text "Dados inválidos") next ctx
-                    return result
-                else if System.String.IsNullOrWhiteSpace(payload.timestamp) then
-                    do! cancelarTransacao payload // Side effect: await cancellation
-                    let! result = RequestErrors.badRequest (text "Timestamp ausente") next ctx
-                    return result
+                let amountParsed, amountValue = Double.TryParse(payload.amount)
+
+                if String.IsNullOrWhiteSpace(payload.transaction_id) then
+                    return! RequestErrors.BAD_REQUEST (text "transaction_id obrigatório") next ctx
+
+                elif transacoesRecebidas.ContainsKey(payload.transaction_id) then
+                    return! RequestErrors.BAD_REQUEST (text "Transação duplicada") next ctx
+
+                elif payload.event <> "payment_success" then
+                    let! success = cancelarTransacao payload
+                    if not success then eprintfn "Failed to cancel transaction"
+                    return! RequestErrors.BAD_REQUEST (text "Evento inválido") next ctx
+
+                elif not amountParsed || amountValue <= 0.0 || String.IsNullOrWhiteSpace(payload.currency) then
+                    let! success = cancelarTransacao payload
+                    if not success then eprintfn "Failed to cancel transaction"
+                    return! RequestErrors.BAD_REQUEST (text "Dados inválidos") next ctx
+
+                elif String.IsNullOrWhiteSpace(payload.timestamp) then
+                    let! success = cancelarTransacao payload
+                    if not success then eprintfn "Failed to cancel transaction"
+                    return! RequestErrors.BAD_REQUEST (text "Timestamp ausente") next ctx
+
                 else
                     transacoesRecebidas.TryAdd(payload.transaction_id, true) |> ignore
-                    do! confirmarTransacao payload
-
-                    let! result = Successful.OK (text "Transação confirmada") next ctx
-                    return result
-
-            | Error errorMessage ->
-                let! result = RequestErrors.badRequest (text errorMessage) next ctx
-                return result
+                    let! success = confirmarTransacao payload
+                    if not success then eprintfn "Failed to confirm transaction"
+                    return! Successful.OK (text "Transação confirmada") next ctx
+            with ex ->
+                eprintfn $"Error processing request: {ex.Message}"
+                return! RequestErrors.BAD_REQUEST (text (sprintf "Erro ao processar payload: %s" ex.Message)) next ctx
     }
